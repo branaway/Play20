@@ -1,44 +1,97 @@
 package play.mvc;
 
+import play.api.*;
+import play.api.mvc.Content;
+
 import play.mvc.Http.*;
 import play.mvc.Result.*;
 
-public abstract class Controller {
+import play.data.*;
+
+import java.util.*;
+
+/**
+ * Superclass for a Java-based controller.
+ */
+public abstract class Controller extends Results {
     
+    /**
+     * Returns the current HTTP context.
+     */
+    public static Context ctx() {
+        return Http.Context.current();
+    }
+    
+    /**
+     * Returns the current HTTP request.
+     */
     public static Request request() {
         return Http.Context.current().request();
     }
     
-    public static Result Text(Object any, String... args) {
-        String text;
-        if(any == null) {
-            text = "";
-        } else {
-            text = any.toString();
-        }
-        String formatted = String.format(text, (Object)args);
-        return new Text(formatted);
+    /**
+     * Returns the current HTTP response.
+     */
+    public static Response response() {
+        return Http.Context.current().response();
     }
     
-    public static Result Html(Object any) {
-        String html;
-        if(any == null) {
-            html = "";
-        } else {
-            html = any.toString();
-        }
-        return new Html(html);
+    /**
+     * Returns the current HTTP session.
+     */
+    public static Session session() {
+        return Http.Context.current().session();
     }
     
-    public static Result Redirect(String url) {
-        return new Redirect(url);
+    /**
+     * Puts a new value into the current session.
+     */
+    public static void session(String key, String value) {
+        session().put(key, value);
     }
     
-    public static Result Redirect(play.api.mvc.Call call) {
-        if(!call.method().equals("GET")) {
-            throw new RuntimeException("Cannot issue a redirect for a " + call.method() + " method.");
-        }
-        return new Redirect(call.url());
+    /**
+     * Returns a vlue from the session.
+     */     
+    public static String session(String key) {
+        return session().get(key);
+    }
+    
+    /**
+     * Returns the current HTTP flash scope.
+     */
+    public static Flash flash() {
+        return Http.Context.current().flash();
+    }
+    
+    /**
+     * Puts a new value into the flash scope.
+     */
+    public static void flash(String key, String value) {
+        flash().put(key, value);
+    }
+    
+    /**
+     * Returns a value from the flash scope.
+     */
+    public static String flash(String key) {
+        return flash().get(key);
+    }
+    
+    // -- Form
+    
+    /**
+     * Instantiates a dynamic form.
+     */
+    public static DynamicForm form() {
+        return new DynamicForm();
+    }
+    
+    /**
+     * Instantiates a new form that wraps the specified class.
+     */
+    public static <T> Form<T> form(Class<T> clazz) {
+        return new Form(clazz);
     }
     
 }

@@ -1,0 +1,12 @@
+@(el: InputElements)
+
+<dl @if(el.errors.size > 0) { class="error" }>
+    <dt>@el.label</dt>
+    <dd>@el.input</dd>
+    @el.errors.map { error =>
+        <dd class="error">@error</dd>
+    }
+    @el.infos.map { info =>
+        <dd class="info">@info</dd>
+    }
+</dl>

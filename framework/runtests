@@ -1,0 +1,31 @@
+echo "[info]"
+echo "[info] ---- PLAYFRAMEWORK CORE TEST RUNNER"
+echo "[info]"
+
+set -e
+export CURRENT=`pwd`
+export SCRIPT=`dirname $0`
+
+cd $SCRIPT
+export PLAY=`pwd`/../play
+
+./cleanIvyCache
+./build publish-local
+
+echo "[info]"
+echo "[info] ---- RUNNING FRAMEWORK SPECS"
+echo "[info]"
+
+./build test
+
+rm -rf ./logs
+
+cd ./integrationtest
+
+echo "[info]"
+echo "[info] ---- RUNNING INTEGRATION TEST"
+echo "[info]"
+
+$PLAY test
+cd $CURRENT
+

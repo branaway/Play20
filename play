@@ -1,9 +1,14 @@
-rpath=`dirname $0`
-echo real path: $rpath
+#! /usr/bin/env sh
 
-if [ -f conf/application.yml ]
-then
-	$rpath/framework/build play "$@"
+if [ -f conf/application.conf ]; then
+  if test "$1" = "clean"; then
+    `dirname $0`/framework/cleanIvyCache
+  fi
+  if [ -n "$1" ]; then
+    `dirname $0`/framework/build "$@"
+  else
+    `dirname $0`/framework/build play
+  fi
 else
-	java -cp $rpath/framework/sbt/boot/scala-2.9.0/lib/*:$rpath/framework/sbt/boot/scala-2.9.0/org.scala-tools.sbt/sbt/0.10.1/*:$rpath/repository/play/play_2.9.0/2.0/jars/* play.console.Console "$@"
+  java -Dsbt.ivy.home=`dirname $0`/repository -Dplay.home=`dirname $0`/framework -Dsbt.boot.properties=`dirname $0`/framework/sbt/play.boot.properties -jar `dirname $0`/framework/sbt/sbt-launch-0.11.0.jar "$@"
 fi

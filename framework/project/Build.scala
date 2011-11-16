@@ -2,26 +2,40 @@ import sbt._
 import Keys._
 
 object PlayBuild extends Build {
-    
+
     import Resolvers._
     import Dependencies._
     import BuildSettings._
     import Generators._
     import LocalSBT._
     import Tasks._
-    
+
     val TemplatesProject = Project(
         "Templates",
         file("templates"),
         settings = buildSettings ++ Seq(
-            libraryDependencies := templates,
+            libraryDependencies := templatesDependencies,
             publishMavenStyle := false,
             publishTo := Some(playRepository),
             publishArtifact in (Compile, packageDoc) := false,
             publishArtifact in (Compile, packageSrc) := false,
-            resolvers += typesafe
+            resolvers ++= Seq(DefaultMavenRepository, typesafe),
+            ivyLoggingLevel := UpdateLogging.DownloadOnly
         )
-    )
+    ).settings(com.typesafe.sbtscalariform.ScalariformPlugin.settings: _*)
+
+    val AnormProject = Project(
+        "Anorm",
+        file("anorm"),
+        settings = buildSettings ++ Seq(
+            libraryDependencies := anormDependencies,
+            publishMavenStyle := false,
+            publishTo := Some(playRepository),
+            publishArtifact in (Compile, packageDoc) := false,
+            publishArtifact in (Compile, packageSrc) := false,
+            ivyLoggingLevel := UpdateLogging.DownloadOnly
+        )
+    ).settings(com.typesafe.sbtscalariform.ScalariformPlugin.settings: _*)
 
     val PlayProject = Project(
         "Play",
@@ -29,34 +43,39 @@ object PlayBuild extends Build {
         settings = buildSettings ++ Seq(
             libraryDependencies := runtime,
             sourceGenerators in Compile <+= sourceManaged in Compile map PlayVersion,
-            unmanagedJars in Compile ++= sbtJars,
+            unmanagedJars in Compile  ++=  sbtJars,
             publishMavenStyle := false,
             publishTo := Some(playRepository),
             publishArtifact in (Compile, packageDoc) := false,
             publishArtifact in (Compile, packageSrc) := false,
-            resolvers ++= Seq(typesafe, akkaRepo),
-            sourceGenerators in Compile <+= (dependencyClasspath in TemplatesProject in Runtime, packageBin in TemplatesProject in Compile, scalaSource in Compile, sourceManaged in Compile) map ScalaTemplates
+            resolvers ++= Seq(DefaultMavenRepository, typesafe),
+            sourceGenerators in Compile <+= (dependencyClasspath in TemplatesProject in Runtime, packageBin in TemplatesProject in Compile, scalaSource in Compile, sourceManaged in Compile, streams) map ScalaTemplates,
+            compile in (Compile) <<= PostCompile,
+            ivyLoggingLevel := UpdateLogging.DownloadOnly
         )
-    ).dependsOn(TemplatesProject)
-    
+    ).settings(com.typesafe.sbtscalariform.ScalariformPlugin.settings: _*).dependsOn(TemplatesProject, AnormProject)
+
     val Root = Project(
         "Root",
         file("."),
         settings = buildSettings ++ Seq(
-            cleanFiles ++= Seq(file("../dist"), file("../repository")),
+            cleanFiles ++= Seq(file("../dist"), file("../repository/local")),
             resetRepositoryTask,
             buildRepositoryTask,
             distTask,
-            publish <<= (publish in PlayProject, publish in TemplatesProject) map { (_,_) => }
+            generateAPIDocsTask,
+            ivyLoggingLevel := UpdateLogging.DownloadOnly,
+            publish <<= (publish in PlayProject, publish in TemplatesProject, publish in AnormProject) map { (_,_,_) => },
+            publishLocal <<= (publishLocal in PlayProject, publishLocal in TemplatesProject, publishLocal in AnormProject) map { (_,_,_) => }
         )
-    ).dependsOn(PlayProject).aggregate(TemplatesProject, PlayProject)
-    
+    ).dependsOn(PlayProject).aggregate(AnormProject, TemplatesProject, PlayProject)
+
     object BuildSettings {
 
         val buildOrganization = "play"
-        val buildVersion      = "2.0"
-        val buildScalaVersion = "2.9.0"
-        val buildSbtVersion   = "0.10.1"
+        val buildVersion      = "2.0-beta"
+        val buildScalaVersion = "2.9.1"
+        val buildSbtVersion   = "0.11.0"
 
         val buildSettings = Defaults.defaultSettings ++ Seq (
             organization   := buildOrganization,
@@ -72,37 +91,64 @@ object PlayBuild extends Build {
 
         def isJar(f:java.io.File) = f.getName.endsWith(".jar")
 
-        val sbtJars = {
+        val sbtJars:Seq[java.io.File] = {
             file("sbt/boot/scala-" + buildScalaVersion + "/org.scala-tools.sbt/sbt/" + buildSbtVersion).listFiles.filter(isJar) ++
             file("sbt/boot/scala-" + buildScalaVersion + "/org.scala-tools.sbt/sbt/" + buildSbtVersion + "/xsbti").listFiles.filter(isJar) ++
             Seq(file("sbt/boot/scala-" + buildScalaVersion + "/lib/jline.jar"))
-        }.map(jar => Attributed.blank(jar.getAbsoluteFile))
+        }
 
     }
 
-    object Resolvers {  
-
-        val playRepository = Resolver.file("Play Local Repository", file("../repository"))(Resolver.ivyStylePatterns)    
-        val typesafe = Resolver.url("Typesafe Repository", url("http://repo.typesafe.com/typesafe/ivy-releases/"))(Resolver.ivyStylePatterns)
-        val akkaRepo = "Akka Repo" at "http://akka.io/repository"
-
+    object Resolvers {
+        val playLocalRepository = Resolver.file("Play Local Repository", file("../repository/local"))(Resolver.ivyStylePatterns)   
+        val playRepository = Resolver.ssh("Play Repository", "download.playframework.org", "/srv/http/download.playframework.org/htdocs/ivy-releases/")(Resolver.ivyStylePatterns) as("root", new File(System.getProperty("user.home") + "/.ssh/id_rsa"), "") withPermissions("0644")
+        val typesafe = "Typesafe Repository" at "http://repo.typesafe.com/typesafe/releases/"
     }
 
     object Dependencies {
 
         val runtime = Seq(
-            "org.jboss.netty"                   %   "netty"             %   "3.2.4.Final",
-            "org.slf4j"                         %   "slf4j-api"         %   "1.6.1",
-            "com.github.scala-incubator.io"     %%  "file"              %   "0.1.2",
-            "se.scalablesolutions.akka"         %   "akka-actor"        %   "1.1.3",
-            "org.avaje"                         %   "ebean"             %   "2.7.1",
-            "com.h2database"                    %   "h2"                %   "1.3.158",
-            "org.scala-tools"                   %%   "scala-stm"         %   "0.3"
+            "org.jboss.netty"                   %    "netty"                    %   "3.2.6.Final",
+            "org.slf4j"                         %    "slf4j-api"                %   "1.6.2",
+            "org.slf4j"                         %    "jul-to-slf4j"             %   "1.6.2",
+            "org.slf4j"                         %    "jcl-over-slf4j"           %   "1.6.2",
+            "ch.qos.logback"                    %    "logback-core"             %   "0.9.30",
+            "ch.qos.logback"                    %    "logback-classic"          %   "0.9.30",
+            "com.github.scala-incubator.io"     %%   "scala-io-file"            %   "0.2.0",
+            "se.scalablesolutions.akka"         %    "akka-actor"               %   "1.2",
+            "se.scalablesolutions.akka"         %    "akka-slf4j"               %   "1.2",
+            "org.avaje"                         %    "ebean"                    %   "2.7.1",
+            "com.h2database"                    %    "h2"                       %   "1.3.158",
+            "org.scala-tools"                   %%   "scala-stm"                %   "0.3",
+            "com.jolbox"                        %    "bonecp"                   %   "0.7.1.RELEASE",
+            "org.yaml"                          %    "snakeyaml"                %   "1.9",
+            "org.hibernate"                     %    "hibernate-validator"      %   "4.2.0.Final",
+            "org.springframework"               %    "spring-context"           %   "3.0.6.RELEASE"   notTransitive(),
+            "org.springframework"               %    "spring-core"              %   "3.0.6.RELEASE"   notTransitive(),
+            "org.springframework"               %    "spring-beans"             %   "3.0.6.RELEASE"   notTransitive(),
+            "joda-time"                         %    "joda-time"                %   "2.0",
+            "mysql"                             %    "mysql-connector-java"     %   "5.1.17",
+            "javassist"                         %    "javassist"                %   "3.12.1.GA",
+            "commons-lang"                      %    "commons-lang"             %   "2.6",
+            "rhino"                             %    "js"                       %   "1.7R2",
+            "com.google.javascript"             %    "closure-compiler"         %   "r1459"           notTransitive(),
+            "com.ning"                          %    "async-http-client"        %   "1.6.5",
+            "org.reflections"                   %    "reflections"              %   "0.9.5",
+            "javax.servlet"                     %    "javax.servlet-api"        %   "3.0.1",
+            "org.specs2"                        %%   "specs2"                   %   "1.6.1"    %   "test",
+            "com.novocode"                      %    "junit-interface"          %   "0.7"      %   "test",
+            "org.seleniumhq.selenium"           %    "selenium-chrome-driver"   % "2.11.0"     %   "test",
+            "org.seleniumhq.selenium"           %    "selenium-htmlunit-driver" % "2.11.0"     %   "test"
         )
 
-        val templates = Seq(
-            "com.github.scala-incubator.io"     %%  "file"              %   "0.1.2",
-            "org.scala-lang"                    %   "scala-compiler"    %   buildScalaVersion
+        val templatesDependencies = Seq(
+            "com.github.scala-incubator.io"     %%   "scala-io-file"            %   "0.2.0",
+            "org.specs2"                        %%   "specs2"                   %   "1.6.1"    %   "test",
+            "org.scala-lang"                    %    "scala-compiler"           %   buildScalaVersion
+        )                                                                       
+
+        val anormDependencies = Seq(
+            "org.scala-lang"                    %    "scalap"                   %   buildScalaVersion 
         )
 
     }
@@ -115,7 +161,7 @@ object PlayBuild extends Build {
                 """|package play.core
                    |
                    |object PlayVersion {
-                   |    val current = "%s"       
+                   |    val current = "%s"
                    |}
                 """.stripMargin.format(BuildSettings.buildVersion)
             )
@@ -123,6 +169,28 @@ object PlayBuild extends Build {
         }
 
     }
+
+    // ----- Post compile
+
+    lazy val PostCompile = (dependencyClasspath in Compile, compile in Compile, classDirectory in Compile) map { (deps,analysis,classes) =>
+
+        // Ebean (really hacky sorry)
+
+        import java.net._
+
+        val cp = deps.map(_.data.toURL).toArray :+ classes.toURL
+        val cl = new URLClassLoader(cp)
+
+        val t = cl.loadClass("com.avaje.ebean.enhance.agent.Transformer").getConstructor(classOf[Array[URL]], classOf[String]).newInstance(cp, "debug=0").asInstanceOf[AnyRef]
+        val ft = cl.loadClass("com.avaje.ebean.enhance.ant.OfflineFileTransform").getConstructor(
+            t.getClass, classOf[ClassLoader], classOf[String], classOf[String]
+        ).newInstance(t, ClassLoader.getSystemClassLoader, classes.getAbsolutePath, classes.getAbsolutePath).asInstanceOf[AnyRef]
+
+        ft.getClass.getDeclaredMethod("process", classOf[String]).invoke(ft,"play/db/ebean/**")
+
+        analysis
+    }
+
 
     object Tasks {
 
@@ -132,16 +200,34 @@ object PlayBuild extends Build {
 
         val resetRepository = TaskKey[File]("reset-repository")
         val resetRepositoryTask = resetRepository := {
-            val repository = file("../repository")
-            IO.delete(repository)
-            IO.createDirectory(repository)
-            repository
+          val repository = file("../repository/local")
+          IO.createDirectory(repository)
+          repository
+        }
+
+        // ----- Generate API docs
+
+        val generateAPIDocs = TaskKey[Unit]("api-docs")
+        val generateAPIDocsTask = TaskKey[Unit]("api-docs") <<= (fullClasspath in Compile, compilers, streams) map { (classpath, cs, s) => 
+
+          IO.delete(file("../documentation/api"))
+
+          // Scaladoc
+          val sourceFiles = (file("play/src/main/scala/play/api") ** "*.scala").get ++ (file("play/src/main/scala/views") ** "*.scala").get ++ (file("play/target/scala-2.9.1/src_managed/main/views") ** "*.scala").get
+          new Scaladoc(10, cs.scalac)("Play 2.0 Scala API", sourceFiles, classpath.map(_.data), file("../documentation/api/scala"), Nil, s.log)
+
+          // Javadoc
+          val javaSources = file("play/src/main/java")
+          val javaApiTarget = file("../documentation/api/java")
+          val javaClasspath = classpath.map(_.data).mkString(":")
+          """javadoc -windowtitle playframework -doctitle Play&nbsp;2.0&nbsp;Java&nbsp;API  -sourcepath %s -d %s -subpackages play -exclude play.api:play.core -classpath %s""".format(javaSources, javaApiTarget, javaClasspath) ! s.log
+
         }
 
         // ----- Build repo
 
         val buildRepository = TaskKey[Unit]("build-repository")
-        val buildRepositoryTask = TaskKey[Unit]("build-repository") <<= (resetRepository, publish, dependencyClasspath in Runtime, sbtVersion) map { (repository, published, classpath, sbtVersion) =>
+        val buildRepositoryTask = TaskKey[Unit]("build-repository") <<= (resetRepository, update, update in test, publishLocal, scalaVersion, streams) map { (repository, updated, testUpdated, published, scalaVersion, s) =>
 
             def checksum(algo:String)(bytes:Array[Byte]) = {
                 import java.security.MessageDigest
@@ -164,62 +250,49 @@ object PlayBuild extends Build {
                     IO.write(file(f.getAbsolutePath + "." + algo), checksum(algo)(content.getBytes))
                 }
             }
-
-            val dependencies = classpath.map(_.data).filter(_.ext == "jar").flatMap { jarFile =>
-                val ivyDescriptor = (jarFile.getParentFile.getParentFile * "ivy-*.xml").get.headOption
-                ivyDescriptor.map { xmlFile =>
-                    val version = xmlFile.getName.drop(4).dropRight(4)
-                    val artifactType = jarFile.getParentFile.getName
-                    val name = xmlFile.getParentFile.getName
-                    val organization = xmlFile.getParentFile.getParentFile.getName
-                    (jarFile, artifactType, organization, name, version, xmlFile)
-                }
+            
+            // Retrieve all ivy files from cache 
+            // (since we cleaned the cache and run update just before, all these dependencies are useful)
+            val ivyFiles = ((repository / "../cache" * "*").filter { d => 
+              d.isDirectory && d.getName != "scala_%s".format(scalaVersion) 
+            } ** "ivy-*.xml").get
+            
+            // From the ivy files, deduct the dependencies
+            val dependencies = ivyFiles.map { descriptor =>
+              val organization = descriptor.getParentFile.getParentFile.getName
+              val name = descriptor.getParentFile.getName
+              val version = descriptor.getName.drop(4).dropRight(4)
+              descriptor -> (organization, name, version)
             }
-
-            dependencies.foreach { dep =>
-
-                val depDirectory = repository / dep._3 / dep._4 / dep._5 
-                val artifactDir = depDirectory / dep._2
-                val ivyDir = depDirectory / "ivys"
-                val artifact = artifactDir / (dep._4 + ".jar")
-                val ivy = ivyDir / "ivy.xml"
-
-                Seq(artifactDir, ivyDir).foreach(IO.createDirectory)
-                Seq(dep._1 -> artifact, dep._6 -> ivy).foreach(copyWithChecksums)
+            
+            // Resolve artifacts for these dependencies (only jars)
+            val dependenciesWithArtifacts = dependencies.map {
+              case (descriptor, (organization, name, version)) => {
+                var jars = (descriptor.getParentFile ** ("*-" + version + ".jar")).get
+                s.log.info("Found dependency %s::%s::%s -> %s".format(
+                  organization, name, version, jars.map(_.getName).mkString(", ")
+                ))
+                (descriptor, jars, (organization, name, version))
+              }
             }
-
-            val scalaIvys = repository / "org.scala-lang" / "scala-library" / buildScalaVersion / "ivys"
-            IO.createDirectory(scalaIvys)
-            writeWithChecksums(scalaIvys / "ivy.xml",
-                """|<?xml version="1.0" encoding="UTF-8"?>
-                   |<ivy-module version="2.0">
-                   |	<info organisation="org.scala-lang"
-                   |		module="scala-library"
-                   |		revision="%s"
-                   |		status="release"
-                   |		publication="20101109190151"
-                   |	/>
-                   |</ivy-module>
-                """.stripMargin.trim.format(buildScalaVersion)
-            )
-
-            IO.write(file("../play"),
-                """
-                    |if [ -f conf/application.yml ]
-                    |then
-                    |	`dirname $0`/framework/build play "$@"
-                    |else
-                    |	java -cp `dirname $0`/framework/sbt/boot/scala-%1$s/lib/*:`dirname $0`/framework/sbt/boot/scala-%1$s/org.scala-tools.sbt/sbt/%3$s/*:`dirname $0`/repository/play/play_%1$s/%2$s/jars/* play.console.Console "$@"
-                    |fi
-                """.stripMargin.trim.format(buildScalaVersion, buildVersion, sbtVersion)
-            )
+            
+            // Build the local repository from these informations
+            dependenciesWithArtifacts.foreach { 
+              case (descriptor, jars, (organization, name, version)) => {
+                val dependencyDir = repository / organization / name / version
+                val artifacts = jars.map(j => dependencyDir / j.getParentFile.getName / (j.getName.dropRight(5 + version.size) + ".jar"))
+                val ivy = dependencyDir / "ivys/ivy.xml"
+                
+                (Seq(descriptor -> ivy) ++ jars.zip(artifacts)).foreach(copyWithChecksums)
+              }
+            }
 
         }
 
         // ----- Dist package
 
         val dist = TaskKey[File]("dist")
-        val distTask = dist <<= (buildRepository) map { _ =>
+        val distTask = dist <<= (buildRepository, publish, generateAPIDocs) map { (_,_,_) =>
 
             import sbt.NameFilter._
 
@@ -230,15 +303,21 @@ object PlayBuild extends Build {
                 (root ** "*") --- 
                 (root ** "dist") --- 
                 (root ** "dist" ** "*") --- 
+                (root ** "*.log") --- 
+                (root ** "logs") --- 
+                (root / "repository/cache") --- 
+                (root / "repository/cache" ** "*") --- 
+                (root / "framework/sbt/boot") --- 
+                (root / "framework/sbt/boot" ** "*") ---
+                (root ** "project/project") --- 
                 (root ** "target") --- 
                 (root ** "target" ** "*") --- 
                 (root ** ".*") ---
+                (root ** ".*") ---
                 (root ** ".git" ** "*") ---
-                (root ** "dropbox" ** "*") ---
-                (root ** "cleanIvyCache") ---
                 (root ** "*.lock")
             }
-            
+
             val zipFile = root / "dist" / (packageName + ".zip")
 
             IO.delete(root / "dist")
@@ -247,14 +326,14 @@ object PlayBuild extends Build {
 
             zipFile
         }
-        
+
         // ----- Compile templates
-        
-        val ScalaTemplates = { (classpath:Seq[Attributed[File]], templateEngine:File, sourceDirectory:File, generatedDir:File) =>
+
+        val ScalaTemplates = { (classpath:Seq[Attributed[File]], templateEngine:File, sourceDirectory:File, generatedDir:File, streams:sbt.std.TaskStreams[sbt.Project.ScopedKey[_]]) =>
             val classloader = new java.net.URLClassLoader(classpath.map(_.data.toURI.toURL).toArray, this.getClass.getClassLoader)
             val compiler = classloader.loadClass("play.templates.ScalaTemplateCompiler")
             val generatedSource = classloader.loadClass("play.templates.GeneratedSource")
-            
+
             (generatedDir ** "*.template.scala").get.foreach { source =>
                 val constructor = generatedSource.getDeclaredConstructor(classOf[java.io.File])
                 val sync = generatedSource.getDeclaredMethod("sync")
@@ -271,9 +350,10 @@ object PlayBuild extends Build {
             }
             
             (sourceDirectory ** "*.scala.html").get.foreach { template =>
+                streams.log.info("Compiling %s".format(template))
                 val compile = compiler.getDeclaredMethod("compile", classOf[java.io.File], classOf[java.io.File], classOf[java.io.File], classOf[String], classOf[String], classOf[String])
                 try {
-                    compile.invoke(null, template, sourceDirectory, generatedDir, "play.templates.Html", "play.templates.HtmlFormat", "")
+                    compile.invoke(null, template, sourceDirectory, generatedDir, "play.api.templates.Html", "play.api.templates.HtmlFormat", "import play.api.templates._\nimport play.api.templates.PlayMagic._")
                 } catch {
                     case e:java.lang.reflect.InvocationTargetException =>{
                         val t = e.getTargetException
@@ -282,11 +362,10 @@ object PlayBuild extends Build {
                     }
                 }
             }
-            
+
             (generatedDir ** "*.scala").get.map(_.getAbsoluteFile)
         }
-        
 
     }
-    
+
 }
